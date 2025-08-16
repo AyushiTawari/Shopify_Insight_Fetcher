@@ -25,6 +25,7 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute(f"CREATE DATABASE IF NOT EXISTS shopify")
     cursor.execute(f"USE shopify")
+
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS brand (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -32,6 +33,7 @@ def init_db():
         product_catalog JSON,
         hero_products JSON,
         policies JSON,
+        faqs JSON,
         about TEXT,
         contact JSON,
         socials JSON,
@@ -49,8 +51,8 @@ def save_to_db(data):
         cursor.execute(f"USE shopify")
         query = """
         INSERT INTO brand 
-        (brand_url, product_catalog, hero_products, policies, about, contact, socials, important_links)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+        (brand_url, product_catalog, hero_products, policies,faqs, about, contact, socials, important_links)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
         """
 
         cursor.execute(query, (
@@ -58,6 +60,7 @@ def save_to_db(data):
             json.dumps(data["product_catalog"]),
             json.dumps(data["hero_products"]),
             json.dumps(data["policies"]),
+            json.dumps(data["faqs"]),
             data["about"],
             json.dumps(data["contact"]),
             json.dumps(data["socials"]),
@@ -99,6 +102,51 @@ def fetch_products_json(base_url):
     except:
         return []
     return []
+def extract_faqs(html):
+    faqs = []
+    soup = BeautifulSoup(html, "html.parser")
+    questions = soup.find_all(string=lambda text: text and text.strip().endswith("?"))
+    for q in questions:
+        question_text = q.strip()
+        answer_tag = None
+        if q.parent:
+            answer_tag = q.parent.find_next_sibling(["p", "div"])
+        answer_text = answer_tag.get_text(" ", strip=True) if answer_tag else ""
+        faqs.append({"question": question_text, "answer": answer_text})
+    faq_sections = soup.find_all(
+        lambda tag: tag.name in ["div", "section"]
+        and (
+            "faq" in (tag.get("id") or "").lower()
+            or any("faq" in c.lower() for c in (tag.get("class") or []))
+        )
+    )
+    for section in faq_sections:
+        questions = section.find_all(["h2", "h3", "h4", "button", "strong", "summary"])
+        for q in questions:
+            question_text = q.get_text(" ", strip=True)
+            if not question_text:
+                continue
+            answer_tag = q.find_next_sibling(["p", "div"])
+            if answer_tag:
+                answer_text = answer_tag.get_text(" ", strip=True)
+                if answer_text:
+                    faqs.append({"question": question_text, "answer": answer_text})
+
+    for d in soup.find_all("details"):
+        q = d.find("summary")
+        a = d.find("p") or d.find("div")
+        if q and a:
+            faqs.append({"question": q.get_text(" ", strip=True), "answer": a.get_text(" ", strip=True)})
+
+    for btn in soup.find_all("button"):
+        if "faq" in (btn.get("class") or []) or "faq" in btn.get_text(" ", strip=True).lower():
+            q = btn.get_text(" ", strip=True)
+            a = btn.find_next_sibling("div")
+            if a:
+                faqs.append({"question": q, "answer": a.get_text(" ", strip=True)})
+
+    return faqs
+
 
 @app.route("/fetch_insights", methods=["GET"])
 def fetch_insights():
@@ -116,14 +164,17 @@ def fetch_insights():
 
         products = fetch_products_json(website_url)
 
-        hero_products = []
-        for a in soup.select("a[href*='/products/']")[:5]:
-            hero_products.append(a.get_text(strip=True))
+        hero_products = [a.get_text(strip=True) for a in soup.select("a[href*='/products/']")[:5]]
 
         policies = {}
         for link in soup.find_all("a", href=True):
-            if any(k in link["href"].lower() for k in ["policy", "return", "refund", "privacy"]):
-                policies[link.get_text(strip=True)] = urljoin(website_url, link["href"])
+            href = link["href"].lower()
+            if "privacy" in href:
+                policies["Privacy Policy"] = urljoin(website_url, link["href"])
+            elif "return" in href or "refund" in href:
+                policies["Return/Refund Policy"] = urljoin(website_url, link["href"])
+            elif "policy" in href:
+                policies[link.get_text(strip=True) or "Policy"] = urljoin(website_url, link["href"])
 
         about_text = ""
         about_page = soup.find("a", href=True, string=re.compile("About", re.I))
@@ -139,19 +190,22 @@ def fetch_insights():
         socials = extract_social_links(html)
         footer_links = [urljoin(website_url, a["href"]) for a in soup.select("footer a[href]")]
 
+        faqs = extract_faqs(html)
+
         result = {
             "brand_url": website_url,
             "product_catalog_count": len(products),
             "product_catalog": [p["title"] for p in products],
             "hero_products": hero_products,
             "policies": policies,
+            "faqs": faqs,
             "about": about_text,
-            "contact": contact,
             "socials": socials,
-            "important_links": footer_links
+            "important_links": footer_links,
+            "contact": contact  
         }
-        save_to_db(result)
 
+        save_to_db(result)
         return jsonify(result), 200
 
     except Exception as e:
