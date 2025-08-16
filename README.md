@@ -3,7 +3,7 @@ This flask code provides insight from any shopify website.
 
 Insights such as:
 
-  Fetches website HTML
+    Fetches website HTML
 
   Extracts product catalog (via /products.json API)
 
