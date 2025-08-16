@@ -100,7 +100,6 @@ def fetch_products_json(base_url):
         return []
     return []
 
-# ---------- Flask Route ----------
 @app.route("/fetch_insights", methods=["GET"])
 def fetch_insights():
     website_url = request.args.get("website_url")
@@ -161,3 +160,4 @@ def fetch_insights():
 if __name__ == "__main__":
     init_db()   
     app.run(debug=True, port=5000)
+
